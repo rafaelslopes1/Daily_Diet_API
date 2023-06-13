@@ -1,51 +1,18 @@
 import { FastifyInstance } from "fastify";
-import knex from "knex";
+
 import { checkSessionIdExists } from "../middlewares/checkSessionIdExists";
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
+import console from "node:console";
+import { knex } from "../../infra/knex/db";
 
 export async function mealsRoutes(app: FastifyInstance) {
-  app.get('/',
-    {
-      preHandler: [checkSessionIdExists]
-    },
-    async (request) => {
-      const { sessionId } = request.cookies
-
-      const meals = await knex('meals')
-        .where('session_id', sessionId)
-        .select()
-
-      return { meals }
-    });
-
-  app.get('/:id',
-    {
-      preHandler: [checkSessionIdExists]
-    },
-    async (request) => {
-      const getMealParamsSchema = z.object({
-        id: z.string().uuid()
-      })
-
-      const { id } = getMealParamsSchema.parse(request.params)
-
-      const { sessionId } = request.cookies;
-
-      const meal = await knex('meals')
-        .where({ id, session_id: sessionId })
-        .first()
-
-      return { meal }
-    }
-  )
-
   app.post('/',
     async (request, reply) => {
       const createMealBodySchema = z.object({
         name: z.string(),
         description: z.string(),
-        createdAt: z.date(),
+        createdAt: z.coerce.date(),
         isOnTheDiet: z.boolean(),
       });
 
@@ -58,7 +25,7 @@ export async function mealsRoutes(app: FastifyInstance) {
 
       let { sessionId } = request.cookies;
 
-      if (sessionId) {
+      if (!sessionId) {
         sessionId = randomUUID();
 
         reply.cookie('sessionId', sessionId, {
@@ -67,14 +34,18 @@ export async function mealsRoutes(app: FastifyInstance) {
         });
       }
 
-      await knex('meals').insert({
+      const obj = {
         id: randomUUID(),
         session_id: sessionId,
         name,
         description,
-        created_at: createdAt,
+        created_at: new Date(createdAt),
         is_on_the_diet: isOnTheDiet,
-      });
+      }
+
+      console.log(obj)
+
+      await knex('meals').insert(obj);
 
       reply.status(201).send();
     })
@@ -87,7 +58,7 @@ export async function mealsRoutes(app: FastifyInstance) {
       const updateMealBodySchema = z.object({
         name: z.string(),
         description: z.string(),
-        createdAt: z.date(),
+        createdAt: z.coerce.date(),
         isOnTheDiet: z.boolean(),
       });
 
@@ -130,6 +101,41 @@ export async function mealsRoutes(app: FastifyInstance) {
       await knex('meals').delete().where({ id, session_id: sessionId });
     })
 
+  app.get('/',
+    {
+      preHandler: [checkSessionIdExists]
+    },
+    async (request) => {
+      const { sessionId } = request.cookies
+
+      const meals = await knex('meals')
+        .where('session_id', sessionId)
+        .select()
+
+      return { meals }
+    });
+
+  app.get('/:id',
+    {
+      preHandler: [checkSessionIdExists]
+    },
+    async (request) => {
+      const getMealParamsSchema = z.object({
+        id: z.string().uuid()
+      })
+
+      const { id } = getMealParamsSchema.parse(request.params)
+
+      const { sessionId } = request.cookies;
+
+      const meal = await knex('meals')
+        .where({ id, session_id: sessionId })
+        .first()
+
+      return { meal }
+    }
+  )
+
   app.get('/summary',
     {
       preHandler: [checkSessionIdExists]
@@ -139,20 +145,33 @@ export async function mealsRoutes(app: FastifyInstance) {
 
       const totalMeals = (await knex('meals')
         .where({ session_id: sessionId })
-        .count('id')) || 0;
+        .count('id as total'))[0].total;
 
       const totalOnTheDietMeals = (await knex('meals')
         .where({
           session_id: sessionId,
           is_on_the_diet: true
         })
-        .count('id')) || 0;
+        .count('id as total'))[0].total;
 
-      const totalOffDietMeals = (totalMeals - totalOnTheDietMeals) || 0;
+      const totalOffDietMeals = (Number(totalMeals) - Number(totalOnTheDietMeals)) || 0;
 
-      // const bestSequenceOfOnDietMeals = //toDo
+      const sortedMeals = await knex('meals')
+        .where({ session_id: sessionId })
+        .orderBy('created_at', 'asc').select()
 
+      let bestSequenceOfOnDietMeals = 0;
 
-      return { totalMeals, totalOnTheDietMeals, totalOffDietMeals }
+      let count = 0;
+      for (const meal of sortedMeals) {
+        if (!meal.is_on_the_diet || sortedMeals.indexOf(meal) === sortedMeals.length - 1) {
+          if (count > bestSequenceOfOnDietMeals) bestSequenceOfOnDietMeals = count;
+          count = 0;
+          continue
+        }
+        count += 1;
+      }
+
+      return { totalMeals, totalOnTheDietMeals, totalOffDietMeals, bestSequenceOfOnDietMeals }
     })
 }

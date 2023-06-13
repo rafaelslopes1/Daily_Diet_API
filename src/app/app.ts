@@ -8,4 +8,3 @@ app.register(cookie)
 app.register(mealsRoutes, {
   prefix: 'meals',
 })
-
